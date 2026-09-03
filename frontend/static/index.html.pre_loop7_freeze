@@ -1,0 +1,1482 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OMNIS V3 — System Command</title>
+<style>
+:root{--bg:#070b12;--panel:#0e1520;--panel2:#121c29;--line:#243244;--text:#e7edf5;--muted:#8493a6;--ok:#45e0a5;--warn:#ffd166;--bad:#ff6b6b;--accent:#62d7ff}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:13px system-ui,-apple-system,sans-serif}
+header{position:sticky;top:0;z-index:5;background:#090f18ee;border-bottom:1px solid var(--line);padding:12px 14px}
+.head{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.brand{font-weight:800;letter-spacing:.16em}
+.status{color:var(--ok)}
+main{max-width:1500px;margin:auto;padding:12px;display:grid;grid-template-columns:1.7fr 1fr;gap:12px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.title{padding:10px 12px;border-bottom:1px solid var(--line);font-weight:700;letter-spacing:.08em}
+.body{padding:12px}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.metric{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:10px}
+.metric span{display:block;color:var(--muted);font-size:11px}
+.metric b{display:block;margin-top:4px;word-break:break-word}
+pre{margin:0;white-space:pre-wrap;word-break:break-word;font:11px ui-monospace,monospace;color:#cbd5e1}
+#events,#modules,#agents,#reasoning{max-height:360px;overflow:auto}
+textarea{width:100%;min-height:110px;background:#080d15;color:var(--text);border:1px solid var(--line);border-radius:9px;padding:12px;resize:vertical}
+button{border:1px solid var(--line);background:var(--panel2);color:var(--text);border-radius:8px;padding:9px 12px;font-weight:700}
+button.primary{background:#163448;border-color:#2b7191;color:#9ee8ff}
+button:disabled{opacity:.5}
+.actions{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+.reason{white-space:pre-wrap;line-height:1.5;background:#080d15;border:1px solid var(--line);border-radius:9px;padding:12px;min-height:80px}
+@media(max-width:900px){main{grid-template-columns:1fr}.grid{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+<header>
+<div class="head">
+<div class="brand">OMNIS V3</div>
+<div id="status" class="status">CONNECTING</div>
+</div>
+</header>
+
+<main>
+
+<div id="omnis-v3-controls" class="panel">
+<div class="title">V3 SIMULATION CONTROLS</div>
+<div class="body">
+<div class="grid">
+
+<div class="metric">
+<span>SEED</span>
+<input id="seed" type="number"
+min="0" max="2147483647" value="42"
+style="width:100%;margin-top:6px">
+</div>
+
+<div class="metric">
+<span>GENERATIONS</span>
+<input id="generations" type="number"
+min="1" max="1000" value="10"
+style="width:100%;margin-top:6px">
+</div>
+
+<div class="metric">
+<span>DEBT ALLOWED</span>
+<label style="display:block;margin-top:8px">
+<input id="debt_allowed" type="checkbox" checked>
+ENABLED
+</label>
+</div>
+
+<div class="metric">
+<span>SIMULATION</span>
+<button class="primary" id="runSimulation"
+style="margin-top:6px;width:100%">
+RUN SIMULATION
+</button>
+</div>
+
+</div>
+
+<div class="reason" id="simResult" style="margin-top:10px">
+Ready — V3 controls are live.
+</div>
+
+</div>
+</div>
+
+<div class="panel" id="omnis-ask-panel">
+<div class="title">ASK MY SYSTEM</div>
+<div class="body">
+
+<textarea id="systemQuestion"
+placeholder="Ask OMNIS about the current system, simulation, lineage, evidence, state, or next decision..."></textarea>
+
+<div class="actions">
+<button class="primary" id="askSystem">
+ASK MY SYSTEM
+</button>
+</div>
+
+<div class="reason" id="systemAnswer">
+Ask a question. OMNIS will evaluate it against the live V3 system state and current simulation lineage.
+</div>
+
+</div>
+</div>
+
+<section class="panel">
+<div class="title">SYSTEM STATE</div>
+<div class="body">
+<div class="grid">
+<div class="metric"><span>STATUS</span><b id="sys">—</b></div>
+<div class="metric"><span>BLOOM</span><b id="bloom">—</b></div>
+<div class="metric"><span>ADVISOR</span><b id="advisor">—</b></div>
+<div class="metric"><span>MODEL</span><b id="model">—</b></div>
+</div>
+</div>
+</section>
+
+<section class="panel">
+<div class="title">SLM ADVISOR</div>
+<div class="body">
+<textarea id="input" placeholder="Enter lineage or operational question..."></textarea>
+<div class="actions">
+<button class="primary" onclick="advise()">ASK ADVISOR</button>
+</div>
+<div class="reason" id="reasoning">Awaiting advisor input.</div>
+</div>
+</section>
+
+<section class="panel">
+<div class="title">SIMULATION</div>
+<div class="body">
+<div class="grid">
+<div class="metric"><span>GENERATIONS</span><b id="gens">10</b></div>
+<div class="metric"><span>SEED</span><b id="seed">—</b></div>
+<div class="metric"><span>SIM ID</span><b id="simid">—</b></div>
+<div class="metric"><span>SIM STATUS</span><b id="simstatus">—</b></div>
+</div>
+<div class="actions">
+<button onclick="startSim()">START SIMULATION</button>
+</div>
+</div>
+</section>
+
+<section class="panel">
+<div class="title">LATEST LINEAGES</div>
+<div class="body"><pre id="events">Loading...</pre></div>
+</section>
+
+<section class="panel">
+<div class="title">SYSTEM TELEMETRY</div>
+<div class="body"><pre id="modules">Loading...</pre></div>
+</section>
+
+<div class="panel" id="loop57Panel">
+<div class="title">CLOSED LOOP CONTROL</div>
+<div class="body">
+
+<div class="actions">
+<button class="primary" onclick="closeLoop5()">CLOSE LOOP 5</button>
+<button class="primary" onclick="closeLoop6()">CLOSE LOOP 6</button>
+<button class="primary" onclick="closeLoop7()">RUN LOOP 7</button>
+</div>
+
+<div class="reason" id="loop57Status">
+Loop 5 → Loop 6 → Loop 7 ready.
+</div>
+
+<pre id="loop57Telemetry">Awaiting loop execution.</pre>
+
+</div>
+</div>
+
+</main>
+
+<script>
+async function api(path,opts={}){
+ const r=await fetch(path,opts);
+ return await r.json();
+}
+
+async function health(){
+ try{
+  const d=await api('/api/health');
+  document.getElementById('sys').textContent=d.status||'—';
+  document.getElementById('bloom').textContent=d.bloom_available?'AVAILABLE':'OFFLINE';
+  document.getElementById('advisor').textContent=d.advisor?.backend||'—';
+  document.getElementById('model').textContent=d.advisor?.model||d.advisor?.model_path||'—';
+  document.getElementById('status').textContent='ONLINE';
+  document.getElementById('modules').textContent=JSON.stringify(d,null,2);
+ }catch(e){
+  document.getElementById('status').textContent='OFFLINE';
+ }
+}
+
+async function latest(){
+ try{
+  const d=await api('/api/sim/latest');
+  document.getElementById('events').textContent=JSON.stringify(d.lineages||d,null,2);
+ }catch(e){}
+}
+
+async function advise(){
+ const box=document.getElementById('reasoning');
+ const text=document.getElementById('input').value;
+ box.textContent='Consulting SLM advisor...';
+ try{
+  const d=await api('/api/advisor/advise',{
+   method:'POST',
+   headers:{
+    'Content-Type':'application/json',
+    'X-API-Key':localStorage.getItem('omnis_api_key')||''
+   },
+   body:JSON.stringify({input:text,lineage:text})
+  });
+  box.textContent=d.advice||d.reason||JSON.stringify(d,null,2);
+ }catch(e){box.textContent='Advisor request failed: '+e}
+}
+
+async function startSim(){
+ try{
+  let key=localStorage.getItem('omnis_api_key');
+  if(!key){
+   const k=await api('/api/apikey');
+   key=k.api_key;
+   localStorage.setItem('omnis_api_key',key);
+  }
+  const d=await api('/api/sim/start',{
+   method:'POST',
+   headers:{'Content-Type':'application/json','X-API-Key':key},
+   body:JSON.stringify({seed:Math.floor(Math.random()*2147483647),generations:10,debt_allowed:true})
+  });
+  document.getElementById('simid').textContent=d.sim_id??'—';
+  document.getElementById('simstatus').textContent=d.status??'—';
+ }catch(e){document.getElementById('simstatus').textContent='ERROR'}
+}
+
+health();
+latest();
+setInterval(health,3000);
+setInterval(latest,5000);
+</script>
+
+<script id="omnis-v3-runtime">
+(function(){
+
+async function api(path, options = {}) {
+    const r = await fetch(path, options);
+    const text = await r.text();
+
+    let data = {};
+    try { data = JSON.parse(text); }
+    catch (_) { throw new Error("Invalid response from " + path); }
+
+    if (!r.ok) {
+        throw new Error(
+            data.detail || data.error || ("HTTP " + r.status)
+        );
+    }
+
+    return data;
+}
+
+async function key() {
+    let k = localStorage.getItem("omnis_api_key");
+
+    if (k) return k;
+
+    const data = await api("/api/apikey");
+
+    if (!data.api_key)
+        throw new Error("OMNIS API key unavailable");
+
+    localStorage.setItem("omnis_api_key", data.api_key);
+    return data.api_key;
+}
+
+async function runSimulation() {
+    const seed = Number(document.getElementById("seed").value);
+    const generations =
+        Number(document.getElementById("generations").value);
+    const debt_allowed =
+        document.getElementById("debt_allowed").checked;
+
+    const result =
+        document.getElementById("simResult");
+
+    if (!Number.isInteger(seed) || seed < 0 || seed > 2147483647) {
+        result.textContent =
+            "Invalid seed. Use an integer from 0 to 2147483647.";
+        return;
+    }
+
+    if (!Number.isInteger(generations) ||
+        generations < 1 || generations > 1000) {
+        result.textContent =
+            "Invalid generations. Use an integer from 1 to 1000.";
+        return;
+    }
+
+    result.textContent = "Starting V3 simulation...";
+
+    try {
+        const k = await key();
+
+        const data = await api("/api/sim/start", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "X-API-Key": k
+            },
+            body: JSON.stringify({
+                seed,
+                generations,
+                debt_allowed
+            })
+        });
+
+        result.textContent =
+            "Simulation started. " +
+            "ID: " + (data.sim_id ?? "—") +
+            " | Status: " + (data.status ?? "started");
+
+        await refresh();
+    } catch (e) {
+        result.textContent = "Simulation failed: " + e.message;
+    }
+}
+
+async function askSystem() {
+    const q =
+        document.getElementById("systemQuestion").value.trim();
+
+    const answer =
+        document.getElementById("systemAnswer");
+
+    if (!q) {
+        answer.textContent = "Enter a question for OMNIS.";
+        return;
+    }
+
+    answer.textContent =
+        "Evaluating the live V3 system state...";
+
+    try {
+        const [health, latest] = await Promise.all([
+            api("/api/health"),
+            api("/api/sim/latest")
+        ]);
+
+        const k = await key();
+
+        const lineage = {
+            source: "OMNIS_V3_LIVE_SYSTEM",
+            question: q,
+            system_health: health,
+            simulation: latest
+        };
+
+        const result = await api("/api/advisor/advise", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "X-API-Key": k
+            },
+            body: JSON.stringify(lineage)
+        });
+
+        if (result.advice)
+            answer.textContent = result.advice;
+        else if (result.reason)
+            answer.textContent = result.reason;
+        else if (result.error)
+            answer.textContent = "Advisor error: " + result.error;
+        else
+            answer.textContent =
+                JSON.stringify(result, null, 2);
+
+    } catch (e) {
+        answer.textContent =
+            "System query failed: " + e.message;
+    }
+}
+
+async function refresh() {
+    try {
+        const h = await api("/api/health");
+
+        const status = document.getElementById("status");
+        if (status)
+            status.textContent =
+                h.status === "ok" ? "ONLINE" : "OFFLINE";
+
+        const advisor = document.getElementById("advisor");
+        if (advisor)
+            advisor.textContent =
+                h.advisor?.backend || "—";
+
+        const model = document.getElementById("model");
+        if (model)
+            model.textContent =
+                h.advisor?.model ||
+                h.advisor?.model_path ||
+                "—";
+
+        const bloom = document.getElementById("bloom");
+        if (bloom)
+            bloom.textContent =
+                h.bloom_available ? "AVAILABLE" : "OFFLINE";
+
+    } catch (_) {
+        const status = document.getElementById("status");
+        if (status) status.textContent = "OFFLINE";
+    }
+}
+
+document.getElementById("runSimulation")
+    ?.addEventListener("click", runSimulation);
+
+document.getElementById("askSystem")
+    ?.addEventListener("click", askSystem);
+
+refresh();
+setInterval(refresh, 3000);
+
+})();
+</script>
+
+
+<script id="omnis-v3-controller">
+(function () {
+    async function api(path, options) {
+        const r = await fetch(path, options || {});
+        const text = await r.text();
+        let data;
+        try { data = JSON.parse(text); }
+        catch (_) { throw new Error("Invalid response from " + path); }
+        if (!r.ok) {
+            throw new Error(data.detail || data.error || ("HTTP " + r.status));
+        }
+        return data;
+    }
+
+    async function getKey() {
+        let key = localStorage.getItem("omnis_api_key");
+        if (key) return key;
+
+        const data = await api("/api/apikey");
+        if (!data.api_key) throw new Error("OMNIS API key unavailable");
+
+        localStorage.setItem("omnis_api_key", data.api_key);
+        return data.api_key;
+    }
+
+    window.startSim = async function () {
+    const seedEl = document.getElementById("seed");
+    const generationsEl = document.getElementById("generations");
+    const debtEl = document.getElementById("debt_allowed");
+
+    if (!seedEl || !generationsEl || !debtEl) {
+        alert("Simulation controls are unavailable.");
+        return;
+    }
+
+    const seed = Number(seedEl.value);
+    const generations = Number(generationsEl.value);
+    const debt_allowed = !!debtEl.checked;
+
+    if (!Number.isInteger(seed) || seed < 0 || seed > 2147483647) {
+        alert("Seed must be an integer from 0 to 2147483647.");
+        return;
+    }
+
+    if (!Number.isInteger(generations) ||
+        generations < 1 || generations > 50) {
+        alert("Generations must be an integer from 1 to 50.");
+        return;
+    }
+
+    const statusEl = document.getElementById("simstatus");
+    const simidEl = document.getElementById("simid");
+
+    try {
+        const key = await getKey();
+
+        if (statusEl) statusEl.textContent = "STARTING...";
+        
+        const result = await api("/api/sim/start", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "X-API-Key": key
+            },
+            body: JSON.stringify({
+                seed,
+                generations,
+                debt_allowed
+            })
+        });
+
+        const simId = result.sim_id;
+
+        if (simidEl) simidEl.textContent = simId ?? "—";
+        if (statusEl)
+            statusEl.textContent = result.status || "STARTED";
+
+        if (simId === undefined || simId === null) {
+            throw new Error("Simulation started without a simulation ID.");
+        }
+
+        /*
+         * Follow THIS simulation only.
+         * The dashboard remains responsive while progress is read.
+         */
+        let finished = false;
+
+        while (!finished) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+
+            try {
+                const state = await api(
+                    "/api/sim/status/" + encodeURIComponent(simId)
+                );
+
+                if (statusEl) {
+                    statusEl.textContent =
+                        state.status ||
+                        state.state ||
+                        "RUNNING";
+                }
+
+                /*
+                 * Update every existing telemetry field that the
+                 * backend actually provides.
+                 */
+                if (state.seed !== undefined)
+                    seedEl.value = state.seed;
+
+                if (state.generations !== undefined)
+                    generationsEl.value = state.generations;
+
+                const generation =
+                    state.generation ??
+                    state.current_generation ??
+                    state.current_gen;
+
+                const progress =
+                    state.progress ??
+                    state.progress_percent;
+
+                if (generation !== undefined && statusEl) {
+                    statusEl.textContent =
+                        (state.status || "RUNNING") +
+                        " — Generation " +
+                        generation +
+                        "/" +
+                        generations +
+                        (progress !== undefined
+                            ? " (" + progress + "%)"
+                            : "");
+                }
+
+                const terminal = String(
+                    state.status || state.state || ""
+                ).toLowerCase();
+
+                if (
+                    terminal === "completed" ||
+                    terminal === "complete" ||
+                    terminal === "finished" ||
+                    terminal === "done" ||
+                    terminal === "failed" ||
+                    terminal === "error" ||
+                    terminal === "stopped"
+                ) {
+                    finished = true;
+                }
+            } catch (e) {
+                /*
+                 * A transient status request must not destroy the run.
+                 */
+                if (statusEl)
+                    statusEl.textContent = "RUNNING — status reconnecting...";
+            }
+        }
+
+        /*
+         * Pull the authoritative latest state once the run ends.
+         */
+        if (typeof refreshTelemetry === "function") {
+            await refreshTelemetry();
+        }
+
+    } catch (e) {
+        if (statusEl)
+            statusEl.textContent = "FAILED";
+
+        alert("Simulation failed: " + e.message);
+    }
+};
+
+    window.askMySystem = async function () {
+        const q = document.getElementById("systemQuestion");
+        const answer = document.getElementById("systemAnswer");
+
+        if (!q || !answer) return;
+
+        const question = q.value.trim();
+        if (!question) {
+            answer.textContent = "Enter a question for OMNIS.";
+            return;
+        }
+
+        answer.textContent = "OMNIS is evaluating the current system state...";
+
+        try {
+            const [health, latest] = await Promise.all([
+                api("/api/health"),
+                api("/api/sim/latest")
+            ]);
+
+            const key = await getKey();
+
+            const result = await api("/api/advisor/advise", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-API-Key": key
+                },
+                body: JSON.stringify({
+                    source: "OMNIS_V3_DASHBOARD",
+                    question: question,
+                    system: health,
+                    current_lineage: latest.lineages || []
+                })
+            });
+
+            answer.textContent =
+                result.advice ||
+                result.reason ||
+                result.error ||
+                JSON.stringify(result, null, 2);
+
+        } catch (e) {
+            answer.textContent = "System query failed: " + e.message;
+        }
+    };
+
+    // One health request only. NO polling loop.
+    window.addEventListener("DOMContentLoaded", async function () {
+        try {
+            const h = await api("/api/health");
+
+            const status = document.getElementById("status");
+            const sys = document.getElementById("sys");
+            const bloom = document.getElementById("bloom");
+            const advisor = document.getElementById("advisor");
+            const model = document.getElementById("model");
+
+            if (status) status.textContent = "ONLINE";
+            if (sys) sys.textContent = h.status || "—";
+            if (bloom) bloom.textContent =
+                h.bloom_available ? "AVAILABLE" : "OFFLINE";
+            if (advisor) advisor.textContent =
+                h.advisor?.backend || "—";
+            if (model) model.textContent =
+                h.advisor?.model || h.advisor?.model_path || "—";
+
+        } catch (e) {
+            const status = document.getElementById("status");
+            if (status) status.textContent = "OFFLINE";
+        }
+    });
+})();
+</script>
+
+
+<script id="omnis-live-telemetry">
+(function () {
+    let telemetryBusy = false;
+
+    async function getJSON(path) {
+        const r = await fetch(path, { cache: "no-store" });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return await r.json();
+    }
+
+    function put(id, value) {
+        const el = document.getElementById(id);
+        if (!el) return;
+
+        if (value === undefined || value === null) return;
+
+        if (typeof value === "object") {
+            el.textContent = JSON.stringify(value, null, 2);
+        } else {
+            el.textContent = String(value);
+        }
+    }
+
+    async function refreshTelemetry() {
+        if (telemetryBusy) return;
+        telemetryBusy = true;
+
+        try {
+            const [latest, stats, health] = await Promise.all([
+                getJSON("/api/sim/latest"),
+                getJSON("/api/sim/stats"),
+                getJSON("/api/health")
+            ]);
+
+            /*
+             * Feed existing dashboard telemetry elements.
+             * Nothing is invented; values come directly from OMNIS APIs.
+             */
+            const source = {
+                ...latest,
+                ...stats
+            };
+
+            put("telemetry", source);
+            put("events", latest.events);
+            put("modules", latest.modules);
+            put("agents", latest.agents);
+            put("reasoning", latest.reasoning);
+
+            put("sys", health.status);
+            put(
+                "bloom",
+                health.bloom_available ? "AVAILABLE" : "OFFLINE"
+            );
+
+            const status = document.getElementById("status");
+            if (status) status.textContent = "ONLINE";
+
+        } catch (_) {
+            const status = document.getElementById("status");
+            if (status) status.textContent = "ONLINE";
+        } finally {
+            telemetryBusy = false;
+        }
+    }
+
+    window.refreshTelemetry = refreshTelemetry;
+
+    /*
+     * Live telemetry only.
+     * The dashboard itself is NOT put into a blocking load loop.
+     */
+    window.addEventListener("DOMContentLoaded", function () {
+        refreshTelemetry();
+        setInterval(refreshTelemetry, 1000);
+    });
+})();
+</script>
+
+
+<script id="omnis-v3-simulation-follow">
+(function () {
+    let activeSimulationId = null;
+    let simulationTimer = null;
+
+    async function simJSON(path, options) {
+        const r = await fetch(path, {
+            ...(options || {}),
+            cache: "no-store"
+        });
+
+        const text = await r.text();
+
+        let data;
+        try {
+            data = JSON.parse(text);
+        } catch (_) {
+            throw new Error("Invalid JSON from " + path);
+        }
+
+        if (!r.ok) {
+            throw new Error(data.detail || ("HTTP " + r.status));
+        }
+
+        return data;
+    }
+
+    function show(id, value) {
+        const el = document.getElementById(id);
+        if (el && value !== undefined && value !== null) {
+            el.textContent = String(value);
+        }
+    }
+
+    async function followSimulation(id) {
+        activeSimulationId = id;
+
+        if (simulationTimer)
+            clearInterval(simulationTimer);
+
+        async function poll() {
+            if (activeSimulationId !== id)
+                return;
+
+            try {
+                const run = await simJSON(
+                    "/api/sim/status/" + encodeURIComponent(id)
+                );
+
+                show("simid", run.sim_id);
+                show("simstatus", run.status || run.state);
+                show("seed", run.seed);
+                show("generations", run.generations);
+
+                const generation =
+                    run.current_generation ?? 0;
+
+                const progress =
+                    run.progress ?? 0;
+
+                const statusEl =
+                    document.getElementById("simstatus");
+
+                if (statusEl) {
+                    statusEl.textContent =
+                        (run.status || run.state || "RUNNING") +
+                        " — Generation " +
+                        generation +
+                        "/" +
+                        run.generations +
+                        " — " +
+                        progress +
+                        "%";
+                }
+
+                const terminal =
+                    ["completed", "failed", "error", "stopped"]
+                    .includes(String(
+                        run.status || run.state || ""
+                    ).toLowerCase());
+
+                if (terminal) {
+                    clearInterval(simulationTimer);
+                    simulationTimer = null;
+                    return;
+                }
+
+            } catch (_) {
+                // Keep following the same simulation.
+            }
+        }
+
+        await poll();
+        simulationTimer = setInterval(poll, 500);
+    }
+
+    window.followOMNISSimulation = followSimulation;
+
+    /*
+     * Wrap the existing startSim so the returned ID becomes
+     * the one authoritative simulation followed by the UI.
+     */
+    const previousStart = window.startSim;
+
+    window.startSim = async function () {
+        if (simulationTimer)
+            clearInterval(simulationTimer);
+
+        await previousStart();
+
+        try {
+            const latest = await simJSON("/api/sim/latest");
+
+            const id = latest?.simulation?.sim_id;
+
+            if (id !== undefined && id !== null)
+                await followSimulation(id);
+
+        } catch (_) {}
+    };
+})();
+</script>
+
+
+<script id="omnis-v3-control-logic">
+(function(){
+
+let activeSimulationId = null;
+let simulationPollTimer = null;
+
+async function omnisAPI(path, options){
+    const response = await fetch(path, options || {});
+    const text = await response.text();
+
+    let data;
+    try {
+        data = JSON.parse(text);
+    } catch {
+        throw new Error("Invalid JSON response from " + path);
+    }
+
+    if (!response.ok) {
+        throw new Error(
+            data.detail ||
+            data.error ||
+            ("HTTP " + response.status)
+        );
+    }
+
+    return data;
+}
+
+async function omnisKey(){
+    let key = localStorage.getItem("omnis_api_key");
+
+    if (key) return key;
+
+    const data = await omnisAPI("/api/apikey");
+    key = data.api_key;
+
+    if (!key) {
+        throw new Error("OMNIS API key unavailable");
+    }
+
+    localStorage.setItem("omnis_api_key", key);
+    return key;
+}
+
+function setText(id, value){
+    const el = document.getElementById(id);
+    if (el) el.textContent = value;
+}
+
+function renderSimulation(sim){
+    if (!sim) return;
+
+    setText("simid", sim.sim_id ?? "—");
+    setText("simstatus", sim.status ?? "—");
+    setText("sim_generation", sim.generation ?? 0);
+
+    const progress = Number(sim.progress || 0);
+
+    setText(
+        "simprogress",
+        Math.round(progress * 100) + "%"
+    );
+
+    setText(
+        "simseed",
+        sim.seed ?? "—"
+    );
+
+    setText(
+        "simgenerations",
+        sim.generations ?? "—"
+    );
+
+    const statusEl = document.getElementById("simstatus");
+
+    if (statusEl) {
+        statusEl.textContent =
+            String(sim.status || "—").toUpperCase();
+    }
+
+    const progressEl =
+        document.getElementById("simProgressBar");
+
+    if (progressEl) {
+        progressEl.style.width =
+            Math.max(0, Math.min(100, progress * 100)) + "%";
+    }
+
+    const resultEl =
+        document.getElementById("simResult");
+
+    if (resultEl && sim.result) {
+        try {
+            resultEl.textContent =
+                JSON.stringify(
+                    JSON.parse(sim.result),
+                    null,
+                    2
+                );
+        } catch {
+            resultEl.textContent = sim.result;
+        }
+    }
+
+    const errorEl =
+        document.getElementById("simError");
+
+    if (errorEl) {
+        errorEl.textContent =
+            sim.error || "";
+    }
+}
+
+async function pollSimulation(simId){
+    try {
+        const sim =
+            await omnisAPI(
+                "/api/sim/status/" + encodeURIComponent(simId)
+            );
+
+        renderSimulation(sim);
+
+        if (
+            sim.status === "completed" ||
+            sim.status === "failed"
+        ) {
+            activeSimulationId = null;
+
+            if (simulationPollTimer) {
+                clearTimeout(simulationPollTimer);
+                simulationPollTimer = null;
+            }
+
+            await refreshOMNIS();
+            return;
+        }
+
+        simulationPollTimer =
+            setTimeout(
+                function(){
+                    pollSimulation(simId);
+                },
+                250
+            );
+
+    } catch (error) {
+        setText(
+            "simstatus",
+            "ERROR: " + error.message
+        );
+
+        activeSimulationId = null;
+
+        if (simulationPollTimer) {
+            clearTimeout(simulationPollTimer);
+            simulationPollTimer = null;
+        }
+    }
+}
+
+window.startSim = async function(){
+
+    const seedEl =
+        document.getElementById("seed");
+
+    const generationsEl =
+        document.getElementById("generations");
+
+    const debtEl =
+        document.getElementById("debt_allowed");
+
+    if (!seedEl || !generationsEl || !debtEl) {
+        alert("Simulation controls are unavailable.");
+        return;
+    }
+
+    const seed = Number(seedEl.value);
+    const generations = Number(generationsEl.value);
+    const debt_allowed = debtEl.checked;
+
+    if (
+        !Number.isInteger(seed) ||
+        seed < 0 ||
+        seed > 2147483647
+    ) {
+        alert(
+            "Seed must be an integer from 0 to 2147483647."
+        );
+        return;
+    }
+
+    if (
+        !Number.isInteger(generations) ||
+        generations < 1 ||
+        generations > 10000
+    ) {
+        alert(
+            "Generations must be an integer from 1 to 10000."
+        );
+        return;
+    }
+
+    try {
+
+        setText("simstatus", "STARTING...");
+        setText("sim_generation", "0");
+        setText("simprogress", "0%");
+
+        const key = await omnisKey();
+
+        const result =
+            await omnisAPI(
+                "/api/sim/start",
+                {
+                    method: "POST",
+                    headers: {
+                        "Content-Type":
+                            "application/json",
+                        "X-API-Key": key
+                    },
+                    body: JSON.stringify({
+                        seed: seed,
+                        generations: generations,
+                        debt_allowed: debt_allowed
+                    })
+                }
+            );
+
+        if (!result.sim_id) {
+            throw new Error(
+                "Simulation started without a simulation ID."
+            );
+        }
+
+        activeSimulationId =
+            Number(result.sim_id);
+
+        renderSimulation(result);
+
+        if (simulationPollTimer) {
+            clearTimeout(simulationPollTimer);
+        }
+
+        pollSimulation(activeSimulationId);
+
+        await refreshOMNIS();
+
+    } catch (error) {
+
+        setText(
+            "simstatus",
+            "FAILED TO START"
+        );
+
+        alert(
+            "Simulation failed: " +
+            error.message
+        );
+    }
+};
+
+window.askMySystem = async function(){
+
+    const questionEl =
+        document.getElementById("systemQuestion");
+
+    const answerEl =
+        document.getElementById("systemAnswer");
+
+    if (!questionEl || !answerEl) return;
+
+    const question =
+        questionEl.value.trim();
+
+    if (!question) {
+        answerEl.textContent =
+            "Enter a question for OMNIS.";
+        return;
+    }
+
+    answerEl.textContent =
+        "OMNIS is evaluating the live V3 system state...";
+
+    try {
+
+        const [health, latest, stats] =
+            await Promise.all([
+                omnisAPI("/api/health"),
+                omnisAPI("/api/sim/latest"),
+                omnisAPI("/api/sim/stats")
+            ]);
+
+        const active =
+            activeSimulationId
+                ? await omnisAPI(
+                    "/api/sim/status/" +
+                    activeSimulationId
+                  )
+                : null;
+
+        const lineage = {
+            source: "OMNIS_V3_DASHBOARD",
+            question: question,
+            system: health,
+            active_simulation: active,
+            current_lineage:
+                latest.lineages || [],
+            simulation_stats:
+                stats
+        };
+
+        const key = await omnisKey();
+
+        const result =
+            await omnisAPI(
+                "/api/advisor/advise",
+                {
+                    method: "POST",
+                    headers: {
+                        "Content-Type":
+                            "application/json",
+                        "X-API-Key": key
+                    },
+                    body: JSON.stringify(lineage)
+                }
+            );
+
+        if (result.advice) {
+            answerEl.textContent =
+                result.advice;
+        } else if (result.reason) {
+            answerEl.textContent =
+                result.reason;
+        } else if (result.error) {
+            answerEl.textContent =
+                "Advisor error: " +
+                result.error;
+        } else {
+            answerEl.textContent =
+                JSON.stringify(
+                    result,
+                    null,
+                    2
+                );
+        }
+
+    } catch (error) {
+
+        answerEl.textContent =
+            "System query failed: " +
+            error.message;
+    }
+};
+
+window.refreshOMNIS = async function(){
+
+    try {
+
+        const health =
+            await omnisAPI("/api/health");
+
+        const latest =
+            await omnisAPI("/api/sim/latest");
+
+        const stats =
+            await omnisAPI("/api/sim/stats");
+
+        if (!activeSimulationId) {
+            const latestSim =
+                latest.lineages &&
+                latest.lineages.length
+                    ? latest.lineages[0]
+                    : null;
+
+            if (latestSim) {
+                renderSimulation(latestSim);
+            }
+        }
+
+        setText(
+            "sys",
+            health.status || "—"
+        );
+
+        setText(
+            "bloom",
+            health.bloom_available
+                ? "AVAILABLE"
+                : "OFFLINE"
+        );
+
+        setText(
+            "advisor",
+            health.advisor?.backend || "—"
+        );
+
+        setText(
+            "model",
+            health.advisor?.model ||
+            health.advisor?.model_path ||
+            "—"
+        );
+
+        setText(
+            "status",
+            "ONLINE"
+        );
+
+        const telemetry =
+            document.getElementById(
+                "telemetry"
+            );
+
+        if (telemetry) {
+            telemetry.textContent =
+                JSON.stringify(
+                    {
+                        health: health,
+                        active_simulation:
+                            activeSimulationId,
+                        latest:
+                            latest.lineages || [],
+                        stats: stats
+                    },
+                    null,
+                    2
+                );
+        }
+
+    } catch {
+
+        setText(
+            "status",
+            "OFFLINE"
+        );
+    }
+};
+
+window.refreshOMNIS();
+
+setInterval(
+    window.refreshOMNIS,
+    1000
+);
+
+})();
+</script>
+
+
+<script id="omnis-v3-loop-logic">
+(function(){
+
+async function loopAPI(path, options){
+    const response = await fetch(
+        path,
+        options || {}
+    );
+
+    const text = await response.text();
+
+    let data;
+
+    try {
+        data = JSON.parse(text);
+    } catch {
+        throw new Error(
+            "Invalid JSON response from " + path
+        );
+    }
+
+    if (!response.ok){
+        throw new Error(
+            data.detail ||
+            data.error ||
+            ("HTTP " + response.status)
+        );
+    }
+
+    return data;
+}
+
+function loopStatus(text){
+    const el =
+        document.getElementById("loop57Status");
+
+    if (el)
+        el.textContent = text;
+}
+
+function loopTelemetry(data){
+    const el =
+        document.getElementById("loop57Telemetry");
+
+    if (el)
+        el.textContent =
+            JSON.stringify(data, null, 2);
+}
+
+window.closeLoop5 = async function(){
+    loopStatus("Closing Loop 5...");
+
+    try {
+        const result =
+            await loopAPI("/api/loops/5/close", {
+                method: "POST"
+            });
+
+        loopStatus(
+            "Loop 5: " +
+            (result.status || "closed")
+        );
+
+        loopTelemetry(result);
+    } catch(error){
+        loopStatus(
+            "Loop 5 failed: " + error.message
+        );
+    }
+};
+
+window.closeLoop6 = async function(){
+    loopStatus("Closing Loop 6...");
+
+    try {
+        const result =
+            await loopAPI("/api/loops/6/close", {
+                method: "POST"
+            });
+
+        loopStatus(
+            "Loop 6: " +
+            (result.status || "closed")
+        );
+
+        loopTelemetry(result);
+    } catch(error){
+        loopStatus(
+            "Loop 6 failed: " + error.message
+        );
+    }
+};
+
+window.closeLoop7 = async function(){
+    loopStatus("Running bounded Loop 7...");
+
+    try {
+        const result =
+            await loopAPI(
+                "/api/loops/7/close",
+                {
+                    method: "POST",
+                    headers: {
+                        "Content-Type":
+                            "application/json"
+                    },
+                    body: JSON.stringify({
+                        cycles: 3
+                    })
+                }
+            );
+
+        loopStatus("Loop 7: execution complete.");
+        loopTelemetry(result);
+    } catch(error){
+        loopStatus(
+            "Loop 7 failed: " + error.message
+        );
+    }
+};
+
+async function refreshLoopTelemetry(){
+    try {
+        const result =
+            await loopAPI("/api/loops/latest");
+
+        const el =
+            document.getElementById("loop57Telemetry");
+
+        if (el)
+            el.textContent =
+                JSON.stringify(
+                    result,
+                    null,
+                    2
+                );
+    } catch {}
+}
+
+refreshLoopTelemetry();
+
+setInterval(
+    refreshLoopTelemetry,
+    3000
+);
+
+})();
+</script>
+
+</body>
+</html>

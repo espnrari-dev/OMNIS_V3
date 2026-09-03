@@ -1,0 +1,39 @@
+from pathlib import Path
+import json
+
+FREEZE_FILE = (
+    Path(__file__).resolve().parent.parent
+    / "data"
+    / "freeze"
+    / "OMNIS_V3_LOOP7_FREEZE.json"
+)
+
+def get_freeze_state():
+    if not FREEZE_FILE.is_file():
+        return {
+            "frozen": False,
+            "reason": "freeze manifest missing",
+        }
+
+    with FREEZE_FILE.open("r", encoding="utf-8") as f:
+        state = json.load(f)
+
+    return {
+        "frozen": state.get("frozen") is True,
+        "schema": state.get("schema"),
+        "freeze_reason": state.get("freeze_reason"),
+        "frozen_at": state.get("frozen_at"),
+        "terminal": state.get("terminal"),
+        "loop_state": state.get("loop_state"),
+        "continuation_policy": state.get("continuation_policy"),
+        "freeze_sha256": state.get("freeze_sha256"),
+    }
+
+def execution_allowed():
+    state = get_freeze_state()
+    policy = state.get("continuation_policy") or {}
+
+    return (
+        not state.get("frozen", False)
+        and not policy.get("execute_next_seed", False)
+    )

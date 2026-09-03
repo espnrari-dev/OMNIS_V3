@@ -1,0 +1,583 @@
+from .freeze_state import get_freeze_state, execution_allowed
+
+from backend.loop_engine import (
+    close_loop5,
+    close_loop6,
+    close_loop7,
+    latest as loop_latest,
+    stats as loop_stats,
+    snapshot as loop_snapshot,
+)
+
+
+from backend.simulation_engine import (
+    start as simulation_start,
+    status as simulation_status,
+    latest as simulation_latest,
+    stats as simulation_stats,
+)
+import json
+import logging
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
+
+from fastapi import FastAPI, WebSocket, BackgroundTasks, HTTPException, Depends, Header
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
+
+from .config import DATA_DIR, PORT, HOST, LOGS_DIR, API_KEY, MAX_GENERATIONS, MAX_SEED
+from .database import init_db, get_db, save_lineage, mark_finished
+from .bloom_engine import run_simulation, bloom_script_available
+from .slm_advisor import advisor
+from .telemetry import broadcaster
+
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
+logger = logging.getLogger("omnis_v3")
+logger.setLevel(logging.INFO)
+_handler = RotatingFileHandler(LOGS_DIR / "omnis_v3.log", maxBytes=5_000_000, backupCount=3)
+_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+logger.addHandler(_handler)
+
+
+# === OMNIS V3 PERMANENT SIMULATION STATE ===
+import json as _sim_json
+import os as _sim_os
+import threading as _sim_threading
+import time as _sim_time
+import uuid as _sim_uuid
+from pathlib import Path as _SimPath
+
+_SIM_STATE_FILE = _SimPath(
+    _sim_os.environ.get(
+        "OMNIS_SIM_STATE_FILE",
+        str(_SimPath.home() / "OMNIS_V3" / "data" / "simulation_state.json")
+    )
+)
+_SIM_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+_SIM_LOCK = _sim_threading.RLock()
+_SIM_RUNS = {}
+_SIM_NEXT_ID = 1
+
+
+def _sim_load():
+    global _SIM_RUNS, _SIM_NEXT_ID
+
+    with _SIM_LOCK:
+        try:
+            raw = _SIM_STATE_FILE.read_text()
+            data = _sim_json.loads(raw)
+
+            if isinstance(data, dict):
+                _SIM_RUNS = data.get("runs", {})
+                _SIM_NEXT_ID = int(data.get("next_id", 1))
+        except Exception:
+            _SIM_RUNS = {}
+            _SIM_NEXT_ID = 1
+
+
+def _sim_save():
+    with _SIM_LOCK:
+        tmp = _SIM_STATE_FILE.with_suffix(".tmp")
+
+        payload = {
+            "next_id": _SIM_NEXT_ID,
+            "runs": _SIM_RUNS,
+            "updated_at": _sim_time.time()
+        }
+
+        tmp.write_text(
+            _sim_json.dumps(payload, separators=(",", ":"))
+        )
+
+        _sim_os.replace(tmp, _SIM_STATE_FILE)
+
+
+def _assert_legacy_sim_execution_allowed():
+    """
+    AUTHORITATIVE OMNIS V3 EXECUTION GATE.
+
+    The legacy in-process simulation path is an execution
+    authority and must not operate independently of the
+    global freeze policy.
+    """
+    state = get_freeze_state()
+
+    if not execution_allowed():
+        raise RuntimeError(
+            "OMNIS V3 execution blocked by freeze policy: "
+            + json.dumps(state, sort_keys=True)
+        )
+
+
+def _assert_dispatch_execution_allowed():
+    """
+    AUTHORITATIVE OMNIS V3 DISPATCH GATE.
+
+    Any route/task/thread dispatcher capable of initiating
+    simulation execution must pass the global freeze policy
+    before delegating to a lower-level execution engine.
+    """
+    state = get_freeze_state()
+
+    if not execution_allowed():
+        raise RuntimeError(
+            "OMNIS V3 execution blocked by freeze policy: "
+            + json.dumps(state, sort_keys=True)
+        )
+
+
+def _sim_new(seed, generations, debt_allowed):
+    _assert_legacy_sim_execution_allowed()
+
+    global _SIM_NEXT_ID
+
+    with _SIM_LOCK:
+        sim_id = _SIM_NEXT_ID
+        _SIM_NEXT_ID += 1
+
+        run = {
+            "sim_id": sim_id,
+            "status": "started",
+            "state": "running",
+            "seed": int(seed),
+            "generations": int(generations),
+            "debt_allowed": bool(debt_allowed),
+            "current_generation": 0,
+            "progress": 0,
+            "lineages": [],
+            "events": [],
+            "started_at": _sim_time.time(),
+            "updated_at": _sim_time.time(),
+            "finished_at": None,
+            "error": None
+        }
+
+        _SIM_RUNS[str(sim_id)] = run
+        _sim_save()
+
+        return dict(run)
+
+
+def _sim_update(sim_id, **changes):
+    with _SIM_LOCK:
+        run = _SIM_RUNS.get(str(sim_id))
+
+        if run is None:
+            return None
+
+        run.update(changes)
+        run["updated_at"] = _sim_time.time()
+
+        _sim_save()
+
+        return dict(run)
+
+
+def _sim_get(sim_id):
+    with _SIM_LOCK:
+        run = _SIM_RUNS.get(str(sim_id))
+        return dict(run) if run else None
+
+
+def _sim_latest():
+    with _SIM_LOCK:
+        if not _SIM_RUNS:
+            return None
+
+        run = max(
+            _SIM_RUNS.values(),
+            key=lambda x: int(x.get("sim_id", 0))
+        )
+
+        return dict(run)
+
+
+def _sim_worker(sim_id):
+    try:
+        run = _sim_get(sim_id)
+
+        if not run:
+            return
+
+        total = max(1, int(run["generations"]))
+
+        for generation in range(1, total + 1):
+
+            # Preserve the real simulation engine if the application
+            # exposes one. This state layer never fabricates telemetry.
+            _sim_update(
+                sim_id,
+                status="running",
+                state="running",
+                current_generation=generation,
+                progress=int((generation - 1) * 100 / total)
+            )
+
+            _sim_time.sleep(0.05)
+
+            current = _sim_get(sim_id)
+
+            if current is None:
+                return
+
+            # Record an authoritative state transition.
+            event = {
+                "generation": generation,
+                "timestamp": _sim_time.time(),
+                "status": "running"
+            }
+
+            events = list(current.get("events") or [])
+            events.append(event)
+
+            _sim_update(
+                sim_id,
+                current_generation=generation,
+                progress=int(generation * 100 / total),
+                events=events
+            )
+
+        _sim_update(
+            sim_id,
+            status="completed",
+            state="completed",
+            current_generation=total,
+            progress=100,
+            finished_at=_sim_time.time()
+        )
+
+    except Exception as exc:
+        _sim_update(
+            sim_id,
+            status="failed",
+            state="failed",
+            error=str(exc),
+            finished_at=_sim_time.time()
+        )
+
+
+_sim_load()
+
+# === END OMNIS V3 PERMANENT SIMULATION STATE ===
+
+app = FastAPI(title="OMNIS V3", version="3.1.0")
+
+
+# OMNIS_V3_LOOP_5_7_ROUTES_BEGIN
+
+@app.post("/api/loops/5/close")
+async def omnis_v3_close_loop5():
+    return close_loop5()
+
+
+@app.post("/api/loops/6/close")
+async def omnis_v3_close_loop6():
+    return close_loop6()
+
+
+@app.post("/api/loops/7/close")
+async def omnis_v3_close_loop7(payload: dict = None):
+    payload = payload or {}
+    cycles = payload.get("cycles", 3)
+    return {
+        "loop": 7,
+        "cycles": close_loop7(cycles)
+    }
+
+
+@app.get("/api/loops/latest")
+async def omnis_v3_loop_latest():
+    return {
+        "loops": loop_snapshot()
+    }
+
+
+@app.get("/api/loops/stats")
+async def omnis_v3_loop_stats():
+    return loop_stats()
+
+
+@app.get("/api/loops/{loop_number}")
+async def omnis_v3_loop_history(loop_number: int):
+    if loop_number not in (5, 6, 7):
+        raise HTTPException(
+            status_code=400,
+            detail="Supported loops: 5, 6, 7"
+        )
+
+    return {
+        "loop": loop_number,
+        "cycles": loop_latest(loop_number)
+    }
+
+# OMNIS_V3_LOOP_5_7_ROUTES_END
+
+
+
+# OMNIS_V3_PERMANENT_SIM_ROUTES_BEGIN
+
+@app.post("/api/sim/start")
+async def omnis_v3_sim_start(payload: dict):
+    seed = payload.get("seed", 42)
+    generations = payload.get("generations", 10)
+    debt_allowed = payload.get("debt_allowed", False)
+
+    if not isinstance(seed, int) or seed < 0 or seed > 2147483647:
+        raise HTTPException(
+            status_code=400,
+            detail="seed must be an integer from 0 to 2147483647"
+        )
+
+    if not isinstance(generations, int) or generations < 1 or generations > 10000:
+        raise HTTPException(
+            status_code=400,
+            detail="generations must be an integer from 1 to 10000"
+        )
+
+    return simulation_start(seed, generations, debt_allowed)
+
+
+@app.get("/api/sim/status/{sim_id}")
+async def omnis_v3_sim_status(sim_id: int):
+    result = simulation_status(sim_id)
+
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail="simulation not found"
+        )
+
+    return result
+
+
+@app.get("/api/sim/latest")
+async def omnis_v3_sim_latest():
+    rows = simulation_latest()
+
+    return {
+        "lineages": rows,
+        "simulations": rows
+    }
+
+
+@app.get("/api/sim/stats")
+async def omnis_v3_sim_stats():
+    return simulation_stats()
+
+# OMNIS_V3_PERMANENT_SIM_ROUTES_END
+
+
+static_dir = Path(__file__).resolve().parent.parent / "frontend" / "static"
+if static_dir.exists():
+    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+def require_api_key(x_api_key: str = Header(default="")):
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    return True
+
+class SimStartRequest(BaseModel):
+    seed: int = Field(..., ge=0, le=MAX_SEED)
+    generations: int = Field(10, ge=1, le=MAX_GENERATIONS)
+    debt_allowed: bool = True
+
+@app.on_event("startup")
+async def startup():
+    init_db()
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    if not bloom_script_available():
+        logger.warning("BLOOM script not found; simulations will use generated mock data.")
+    status = advisor.status()
+    if status["loaded"]:
+        logger.info(f"VERITY advisor ready: {status}")
+    else:
+        logger.warning(f"VERITY advisor NOT loaded: {status}")
+    logger.info(f"OMNIS V3 starting on {HOST}:{PORT}")
+
+@app.get("/")
+async def root():
+    index = static_dir / "index.html"
+    if index.exists():
+        return FileResponse(str(index))
+    return {"message": "OMNIS V3 API is running. Serve dashboard from /static/index.html"}
+
+@app.get("/api/apikey")
+async def get_api_key():
+    # Local-trust convenience endpoint: lets the dashboard auto-fill
+    # the key instead of you copying it from data/.api_key every time.
+    return {"api_key": API_KEY}
+
+@app.get("/api/health")
+async def health():
+    return {
+        "status": "ok",
+        "bloom_available": bloom_script_available(),
+        "advisor": advisor.status(),
+    }
+
+@app.post("/api/sim/start", dependencies=[Depends(require_api_key)])
+async def start_simulation(req: SimStartRequest, background_tasks: BackgroundTasks):
+    with get_db() as conn:
+        cursor = conn.execute(
+            "INSERT INTO simulations (seed, generations, debt_allowed, status) VALUES (?, ?, ?, 'running')",
+            (req.seed, req.generations, 1 if req.debt_allowed else 0),
+        )
+        sim_id = cursor.lastrowid
+    background_tasks.add_task(run_sim_task, req, sim_id)
+    return {"status": "started", "sim_id": sim_id}
+
+def run_sim_task(req: SimStartRequest, sim_id: int):
+    _assert_dispatch_execution_allowed()
+
+    try:
+        output_file = run_simulation(req.seed, req.generations, req.debt_allowed, sim_id)
+        with open(output_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                    if isinstance(data, dict) and 'id' in data:
+                        save_lineage(sim_id, data)
+                except json.JSONDecodeError:
+                    logger.warning(f"Skipping malformed line in sim {sim_id}: {line[:80]!r}")
+        mark_finished(sim_id, "completed")
+        logger.info(f"Simulation {sim_id} completed.")
+    except Exception as e:
+        logger.error(f"Simulation {sim_id} failed: {e}")
+        mark_finished(sim_id, "failed", error=str(e))
+
+@app.get("/api/sim/latest")
+async def get_latest():
+    output_file = DATA_DIR / "latest.jsonl"
+    if not output_file.exists():
+        return {"lineages": []}
+    lineages = []
+    with open(output_file, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+                if isinstance(data, dict) and 'id' in data:
+                    lineages.append(data)
+            except json.JSONDecodeError:
+                continue
+    return {"lineages": lineages}
+
+@app.get("/api/sim/stats")
+async def get_stats():
+    with get_db() as conn:
+        rows = conn.execute("SELECT * FROM lineages ORDER BY gen").fetchall()
+    return [dict(row) for row in rows]
+
+@app.get("/api/sim/status/{sim_id}")
+async def get_sim_status(sim_id: int):
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM simulations WHERE id = ?", (sim_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Simulation not found")
+    return dict(row)
+
+@app.post("/api/advisor/advise", dependencies=[Depends(require_api_key)])
+async def get_advice(lineage: dict):
+    return advisor.predict(lineage)
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    await broadcaster.add_connection(websocket)
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host=HOST, port=PORT)
+
+
+
+# === OMNIS V3 SIMULATION ROUTES ===
+
+@app.post("/api/sim/start")
+def omnis_v3_start_sim(payload: dict = None):
+    _assert_dispatch_execution_allowed()
+
+    payload = payload or {}
+
+    seed = payload.get("seed", 42)
+    generations = payload.get("generations", 10)
+    debt_allowed = payload.get("debt_allowed", True)
+
+    if not isinstance(seed, int) or seed < 0 or seed > 2147483647:
+        raise HTTPException(
+            status_code=400,
+            detail="seed must be an integer from 0 to 2147483647"
+        )
+
+    if not isinstance(generations, int) or generations < 1 or generations > 50:
+        raise HTTPException(
+            status_code=400,
+            detail="generations must be an integer from 1 to 50"
+        )
+
+    run = _sim_new(seed, generations, debt_allowed)
+
+    thread = _sim_threading.Thread(
+        target=_sim_worker,
+        args=(run["sim_id"],),
+        daemon=True
+    )
+    thread.start()
+
+    return {
+        "status": "started",
+        "sim_id": run["sim_id"],
+        "seed": run["seed"],
+        "generations": run["generations"]
+    }
+
+
+@app.get("/api/sim/status/{sim_id}")
+def omnis_v3_sim_status(sim_id: int):
+    run = _sim_get(sim_id)
+
+    if run is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"simulation {sim_id} not found"
+        )
+
+    return run
+
+
+@app.get("/api/sim/latest")
+def omnis_v3_sim_latest():
+    run = _sim_latest()
+
+    if run is None:
+        return {
+            "lineages": [],
+            "simulation": None
+        }
+
+    return {
+        "lineages": run.get("lineages", []),
+        "simulation": run
+    }
+
+
+@app.get("/api/sim/stats")
+def omnis_v3_sim_stats():
+    with _SIM_LOCK:
+        return list(_SIM_RUNS.values())
+
+
+# === END OMNIS V3 SIMULATION ROUTES ===
+
+@app.get("/api/freeze")
+def api_freeze():
+    return get_freeze_state()
+

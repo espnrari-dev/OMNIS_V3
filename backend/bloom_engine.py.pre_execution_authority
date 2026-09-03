@@ -1,0 +1,59 @@
+import json
+import os
+import time
+import subprocess
+import threading
+from pathlib import Path
+from .config import DATA_DIR, BLOOM_EXEC, BLOOM_SCRIPT, MAX_GENERATIONS
+
+_SIM_LOCK = threading.Lock()
+
+def bloom_script_available() -> bool:
+    return Path(BLOOM_SCRIPT).exists()
+
+def run_simulation(seed, generations, debt_allowed=True, sim_id=None):
+    generations = min(generations, MAX_GENERATIONS)
+    output_file = DATA_DIR / f"sim_{seed}_{int(time.time())}_{os.getpid()}.jsonl"
+
+    cmd = [
+        BLOOM_EXEC, BLOOM_SCRIPT,
+        "--seed", str(seed),
+        "--gens", str(generations),
+        "--debt", "1" if debt_allowed else "0",
+        "--output", str(output_file),
+    ]
+
+    if bloom_script_available():
+        try:
+            subprocess.run(cmd, check=True, timeout=300)
+        except subprocess.TimeoutExpired as e:
+            raise RuntimeError(f"BLOOM simulation timed out after 300s (seed={seed})") from e
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"BLOOM simulation exited with error (seed={seed}): {e}") from e
+    else:
+        generate_mock_data(seed, generations, output_file)
+
+    with _SIM_LOCK:
+        latest = DATA_DIR / "latest.jsonl"
+        tmp_link = DATA_DIR / f"latest.jsonl.tmp.{os.getpid()}"
+        if tmp_link.exists() or tmp_link.is_symlink():
+            tmp_link.unlink()
+        tmp_link.symlink_to(output_file)
+        tmp_link.replace(latest)
+
+    return output_file
+
+def generate_mock_data(seed, gens, output_file):
+    import random
+    random.seed(seed)
+    with open(output_file, 'w') as f:
+        for g in range(gens):
+            for _ in range(random.randint(1, 3)):
+                lineage = {
+                    "id": f"{random.randint(0, 0xffffff):06x}",
+                    "gen": g,
+                    "lifespan": random.randint(1, 20),
+                    "capital": round(random.uniform(-5, 5), 2),
+                    "total": random.randint(50, 500) + g * 50,
+                }
+                f.write(json.dumps(lineage) + "\n")

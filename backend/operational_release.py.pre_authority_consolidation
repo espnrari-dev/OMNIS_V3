@@ -1,0 +1,196 @@
+from pathlib import Path
+import json
+import hashlib
+from datetime import datetime, timezone
+
+BASE = Path(__file__).resolve().parent.parent
+
+FREEZE_FILE = (
+    BASE
+    / "data"
+    / "freeze"
+    / "OMNIS_V3_LOOP7_FREEZE.json"
+)
+
+RELEASE_FILE = (
+    BASE
+    / "data"
+    / "freeze"
+    / "OMNIS_V3_OPERATIONAL_RELEASE.json"
+)
+
+
+class OperationalReleaseError(RuntimeError):
+    pass
+
+
+def _load_json(path):
+    if not path.is_file():
+        raise OperationalReleaseError(
+            f"Required manifest missing: {path}"
+        )
+
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as exc:
+        raise OperationalReleaseError(
+            f"Unable to read manifest {path}: {exc}"
+        )
+
+
+def freeze_state():
+    return _load_json(FREEZE_FILE)
+
+
+def freeze_sha256(state):
+    recorded = state.get("freeze_sha256")
+
+    if not recorded:
+        raise OperationalReleaseError(
+            "Freeze manifest has no freeze_sha256."
+        )
+
+    return recorded
+
+
+def release_state():
+    if not RELEASE_FILE.is_file():
+        return None
+
+    return _load_json(RELEASE_FILE)
+
+
+def release_authorized():
+    state = freeze_state()
+    release = release_state()
+
+    if release is None:
+        return False
+
+    if release.get("schema") != "OMNIS_V3_OPERATIONAL_RELEASE_V1":
+        return False
+
+    if release.get("status") != "AUTHORIZED":
+        return False
+
+    if release.get("consumed") is True:
+        return False
+
+    if release.get("freeze_sha256") != freeze_sha256(state):
+        return False
+
+    terminal = state.get("terminal") or {}
+
+    if release.get("seed") != terminal.get("next_seed"):
+        return False
+
+    if release.get("generations") != terminal.get("generations"):
+        return False
+
+    if release.get("debt_allowed") != terminal.get("debt_allowed"):
+        return False
+
+    if release.get("execution_count") != 1:
+        return False
+
+    return True
+
+
+def execution_authorized():
+    """
+    Controlled operational release.
+
+    The Loop-7 freeze remains intact.  Execution is permitted
+    only when an explicit release manifest matches the exact
+    frozen terminal state.
+    """
+
+    return release_authorized()
+
+
+def authorize(seed, generations, debt_allowed):
+    state = freeze_state()
+
+    terminal = state.get("terminal") or {}
+
+    expected_seed = terminal.get("next_seed")
+    expected_generations = terminal.get("generations")
+    expected_debt = terminal.get("debt_allowed")
+
+    if seed != expected_seed:
+        raise OperationalReleaseError(
+            f"Seed mismatch: requested={seed}, expected={expected_seed}"
+        )
+
+    if generations != expected_generations:
+        raise OperationalReleaseError(
+            f"Generation mismatch: requested={generations}, "
+            f"expected={expected_generations}"
+        )
+
+    if bool(debt_allowed) != bool(expected_debt):
+        raise OperationalReleaseError(
+            f"Debt policy mismatch: requested={debt_allowed}, "
+            f"expected={expected_debt}"
+        )
+
+    release = {
+        "schema": "OMNIS_V3_OPERATIONAL_RELEASE_V1",
+        "status": "AUTHORIZED",
+        "authorized_at": datetime.now(timezone.utc).isoformat(),
+        "consumed": False,
+        "execution_count": 1,
+        "freeze_sha256": freeze_sha256(state),
+        "seed": int(seed),
+        "generations": int(generations),
+        "debt_allowed": bool(debt_allowed),
+        "authority": "EXPLICIT_CONTROLLED_OPERATIONAL_RELEASE",
+    }
+
+    RELEASE_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+    tmp = RELEASE_FILE.with_suffix(".tmp")
+
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(release, f, indent=2, sort_keys=True)
+        f.write("\n")
+        f.flush()
+
+    tmp.replace(RELEASE_FILE)
+
+    return release
+
+
+def consume():
+    release = release_state()
+
+    if release is None:
+        raise OperationalReleaseError(
+            "No operational release exists."
+        )
+
+    release["consumed"] = True
+    release["consumed_at"] = datetime.now(timezone.utc).isoformat()
+
+    tmp = RELEASE_FILE.with_suffix(".tmp")
+
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(release, f, indent=2, sort_keys=True)
+        f.write("\n")
+        f.flush()
+
+    tmp.replace(RELEASE_FILE)
+
+
+def status():
+    state = freeze_state()
+    release = release_state()
+
+    return {
+        "freeze_frozen": state.get("frozen"),
+        "freeze_sha256": state.get("freeze_sha256"),
+        "release_present": release is not None,
+        "release_authorized": release_authorized(),
+        "release": release,
+    }
