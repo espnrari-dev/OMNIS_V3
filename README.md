@@ -1,17 +1,18 @@
 # OMNIS_V3
 
-## Description
-Third‑generation omniscient framework – full‑stack system with backend/frontend.
+> **Third‑generation omniscient framework – unified dashboard, AI orchestration, and system control plane.**
 
-## Technology Stack
-Python + Node
+## Role in Aethel
+This repository is a component of the Aethel ecosystem. For detailed documentation, refer to the source code and comments.
 
-## Main Entry
-start.sh
+## Overview
+Unified dashboard and control plane for the entire Aethel stack, with AI orchestration.
 
 ## Quick Start
-- Start all services: `./start-all.sh`
-- Stop all services:  `./stop-all.sh`
+```bash
+cd ~/OMNIS_V3
+# See source files for build/run instructions
+```
 
-## Notes
-This repository is part of the [Aethel](https://github.com/espnrari-dev) ecosystem.
+## License
+MIT – see [LICENSE](LICENSE) (if any)
